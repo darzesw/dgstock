@@ -64,7 +64,7 @@ selected_period = period_map[period_option]
 show_ma = st.sidebar.checkbox("이동평균선 표시 (20일, 60일)", value=True)
 
 
-# ===== 데이터 불러오기 함수 (캐싱) =====
+# ===== 데이터 불러오기 함수 (캐싱으로 속도 향상) =====
 @st.cache_data(ttl=600)
 def get_stock_data(ticker, period):
     """yfinance로 주가 데이터를 가져오는 함수"""
@@ -77,9 +77,9 @@ def get_stock_data(ticker, period):
 if not selected_names:
     st.info("👈 왼쪽 사이드바에서 비교할 종목을 선택해주세요!")
 else:
-    price_data = {}
-    return_data = {}
-    summary_list = []
+    price_data = {}      # 종가 데이터
+    return_data = {}     # 누적 수익률 데이터
+    summary_list = []    # 요약 정보
 
     with st.spinner("주가 데이터를 불러오는 중..."):
         for name in selected_names:
@@ -98,28 +98,27 @@ else:
             total_return = (end_price / start_price - 1) * 100
 
             currency = "원" if name in KOREA_STOCKS else "$"
+            if currency == "원":
+                price_text = f"{end_price:,.0f}원"
+            else:
+                price_text = f"${end_price:,.2f}"
+
             summary_list.append({
                 "종목": name,
-                "현재가": f"{end_price:,.0f} {currency}" if currency == "원"
-                          else f"{currency}{end_price:,.2f}",
-                "기간 수익률(%)": round(total_return, 2),
+                "현재가": price_text,
+                "수익률": total_return,
             })
 
-    # ===== 1. 요약 표 =====
+    # ===== 1. 수익률 요약 (st.metric 사용) =====
     st.subheader("📊 종목별 수익률 요약")
     if summary_list:
-        summary_df = pd.DataFrame(summary_list)
-
-        def highlight_return(val):
-            if isinstance(val, (int, float)):
-                color = "red" if val > 0 else "blue"
-                return f"color: {color}; font-weight: bold;"
-            return ""
-
-        styled_df = summary_df.style.applymap(
-            highlight_return, subset=["기간 수익률(%)"]
-        )
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        cols = st.columns(len(summary_list))
+        for i, info in enumerate(summary_list):
+            cols[i].metric(
+                label=info["종목"],
+                value=info["현재가"],
+                delta=f"{info['수익률']:.2f}%"   # 양수=초록↑, 음수=빨강↓
+            )
 
     # ===== 2. 누적 수익률 비교 차트 (Plotly) =====
     st.subheader(f"📈 누적 수익률 비교 ({period_option})")
@@ -144,14 +143,14 @@ else:
         )
         st.plotly_chart(fig_return, use_container_width=True)
 
-    # ===== 3. 개별 종목 차트 (캔들 + 이동평균선 + 거래량) =====
+    # ===== 3. 개별 종목 상세 차트 (캔들 + 이동평균 + 거래량) =====
     st.subheader("🔍 개별 종목 상세 차트")
     for name in selected_names:
         if name in price_data:
             with st.expander(f"📌 {name} 상세 차트 보기"):
                 df = get_stock_data(ALL_STOCKS[name], selected_period)
 
-                # 위(주가) / 아래(거래량) 2단 서브플롯 생성
+                # 위(주가) / 아래(거래량) 2단 서브플롯
                 fig = make_subplots(
                     rows=2, cols=1,
                     shared_xaxes=True,
@@ -166,11 +165,11 @@ else:
                     open=df["Open"], high=df["High"],
                     low=df["Low"], close=df["Close"],
                     name="주가",
-                    increasing_line_color="red",   # 한국식: 상승=빨강
+                    increasing_line_color="red",   # 상승=빨강
                     decreasing_line_color="blue"   # 하락=파랑
                 ), row=1, col=1)
 
-                # (2) 이동평균선 (선택 시)
+                # (2) 이동평균선
                 if show_ma:
                     ma20 = df["Close"].rolling(20).mean()
                     ma60 = df["Close"].rolling(60).mean()
@@ -183,7 +182,7 @@ else:
                         line=dict(color="green", width=1.5)
                     ), row=1, col=1)
 
-                # (3) 거래량 막대차트
+                # (3) 거래량 막대
                 fig.add_trace(go.Bar(
                     x=df.index, y=df["Volume"],
                     name="거래량",
